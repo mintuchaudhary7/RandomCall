@@ -4,7 +4,7 @@ import io from "socket.io-client";
 import { IoMicOffOutline, IoMicOutline } from "react-icons/io5";
 import { FaPhoneAlt } from "react-icons/fa";
 
-const socket = io("http://localhost:5000");
+const socket = io("https://randomcall-1-9hrm.onrender.com");
 
 export default function Home() {
   const [isWaiting, setIsWaiting] = useState(false);
