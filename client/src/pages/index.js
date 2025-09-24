@@ -5,6 +5,7 @@ import { IoMicOffOutline, IoMicOutline } from "react-icons/io5";
 import { FaPhoneAlt } from "react-icons/fa";
 
 const socket = io("https://randomcall-1-9hrm.onrender.com");
+// const socket = io("http://localhost:5000");
 
 export default function Home() {
   const [isWaiting, setIsWaiting] = useState(false);
@@ -54,8 +55,6 @@ export default function Home() {
           console.warn("No peer to set remote answer on");
           return;
         }
-        // ensure we only call setRemoteDescription when we have a local offer
-        // but if caller already created localOffer then this will succeed
         await peerRef.current.setRemoteDescription(answer);
         remoteDescriptionSetRef.current = true;
 
@@ -74,13 +73,15 @@ export default function Home() {
     });
 
     socket.on("ice_candidate", async ({ from, candidate }) => {
-      // incoming candidate from peer
       try {
         const rtcCandidate = new RTCIceCandidate(candidate);
-        if (peerRef.current && peerRef.current.remoteDescription && peerRef.current.remoteDescription.type) {
+        if (
+          peerRef.current &&
+          peerRef.current.remoteDescription &&
+          peerRef.current.remoteDescription.type
+        ) {
           await peerRef.current.addIceCandidate(rtcCandidate);
         } else {
-          // queue until remote description is set
           pendingCandidatesRef.current.push(rtcCandidate);
         }
       } catch (err) {
@@ -94,7 +95,6 @@ export default function Home() {
     });
 
     return () => {
-      // cleanup socket listeners when component unmounts
       socket.off("call_matched");
       socket.off("offer");
       socket.off("answer");
@@ -106,12 +106,10 @@ export default function Home() {
   }, []);
 
   const startPeerConnection = async (initiator, remotePeerId, incomingOffer) => {
-    // If PC already exists but incomingOffer is provided (we're re-using), that's okay.
     try {
       if (!peerRef.current) {
         const peer = new RTCPeerConnection();
 
-        // send ICE candidates to peer
         peer.onicecandidate = (event) => {
           if (event.candidate && remotePeerId) {
             socket.emit("ice_candidate", {
@@ -121,7 +119,6 @@ export default function Home() {
           }
         };
 
-        // handle remote audio tracks
         peer.ontrack = (event) => {
           console.log("Remote track received");
           if (remoteAudioRef.current) {
@@ -129,18 +126,30 @@ export default function Home() {
           }
         };
 
-        // connection state changes
         peer.onconnectionstatechange = () => {
           console.log("Connection state:", peer.connectionState);
-          if (peer.connectionState === "disconnected" || peer.connectionState === "failed" || peer.connectionState === "closed") {
+          if (
+            peer.connectionState === "disconnected" ||
+            peer.connectionState === "failed" ||
+            peer.connectionState === "closed"
+          ) {
             endCall();
           }
         };
 
-        // get mic and add tracks
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        localStreamRef.current = stream;
-        stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+        // ✅ FIXED: safe check for getUserMedia
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.mediaDevices?.getUserMedia
+        ) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localStreamRef.current = stream;
+          stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+        } else {
+          console.error("getUserMedia is not supported in this browser/context.");
+          alert("Microphone access is not supported in this browser.");
+          return;
+        }
 
         peerRef.current = peer;
       }
@@ -148,22 +157,20 @@ export default function Home() {
       const peer = peerRef.current;
 
       if (initiator) {
-        // caller: create offer and send it
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
-        // send the peer.localDescription (ensures type and sdp are correct)
         socket.emit("offer", { peerId: remotePeerId, offer: peer.localDescription });
       } else if (incomingOffer) {
-        // callee: set remote offer, create & send answer
         await peer.setRemoteDescription(incomingOffer);
-        // apply queued candidates (some browsers allow adding candidates before answer; still we'll queue them until remoteDesc set)
         remoteDescriptionSetRef.current = true;
 
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
-        socket.emit("answer", { peerId: remotePeerId, answer: peer.localDescription });
+        socket.emit("answer", {
+          peerId: remotePeerId,
+          answer: peer.localDescription,
+        });
 
-        // flush any queued remote ICE candidates
         for (const c of pendingCandidatesRef.current) {
           try {
             await peer.addIceCandidate(c);
@@ -177,7 +184,6 @@ export default function Home() {
       setInCall(true);
     } catch (err) {
       console.error("Error in startPeerConnection:", err);
-      // cleanup if something went wrong
       endCall();
     }
   };
@@ -257,10 +263,8 @@ export default function Home() {
       {/* In Call Screen */}
       {inCall && (
         <div className="flex flex-col items-center justify-between h-full py-12 w-full max-w-md animate-fadeIn">
-          {/* Hidden remote audio player */}
           <audio ref={remoteAudioRef} autoPlay />
 
-          {/* Avatars */}
           <div className="flex flex-col gap-8 items-center">
             <div className="w-32 h-32 rounded-full bg-white/20 flex items-center justify-center text-2xl font-bold animate-pulse">
               You
@@ -270,10 +274,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Call Timer */}
           <div className="text-lg font-medium mt-4">{formatTime(callTime)}</div>
 
-          {/* Controls */}
           <div className="flex gap-6 mt-6">
             <button
               onClick={toggleMute}
