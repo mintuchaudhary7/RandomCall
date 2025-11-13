@@ -111,15 +111,15 @@ export default function Call() {
       const res = await fetch(
         "https://randomcall.metered.live/api/v1/turn/credentials?apiKey=3197aeeb715d7a48e0173c693d00f4cc94e0"
       );
-      const iceServers = await res.json();
-      console.log("Fetched ICE servers:", iceServers);
-      return iceServers;
+      const data = await res.json();
+      console.log("Fetched ICE servers:", data.iceServers);
+      return data.iceServers; // ✅ Correct
     } catch (err) {
       console.error("Failed to fetch TURN credentials:", err);
-      // fallback to STUN-only (for testing)
       return [{ urls: "stun:stun.l.google.com:19302" }];
     }
   };
+
 
 
   const startPeerConnection = async (initiator, remotePeerId, incomingOffer) => {
