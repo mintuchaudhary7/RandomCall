@@ -49,29 +49,12 @@ export default function Call() {
       await startPeerConnection(false, from, offer);
     });
 
-    socket.on("answer", async ({ from, answer }) => {
-      console.log("Received answer from:", from);
-      try {
-        if (!peerRef.current) {
-          console.warn("No peer to set remote answer on");
-          return;
-        }
-        await peerRef.current.setRemoteDescription(answer);
-        remoteDescriptionSetRef.current = true;
+   socket.on("answer", async ({ from, answer }) => {
+  if (!peerRef.current) return;
 
-        // flush queued ICE candidates
-        for (const c of pendingCandidatesRef.current) {
-          try {
-            await peerRef.current.addIceCandidate(c);
-          } catch (err) {
-            console.error("Error adding queued ICE candidate after answer", err);
-          }
-        }
-        pendingCandidatesRef.current = [];
-      } catch (err) {
-        console.error("Error handling answer:", err);
-      }
-    });
+  await peerRef.current.setRemoteDescription(answer);
+});
+
 
     socket.on("ice_candidate", async ({ from, candidate }) => {
       try {
@@ -106,105 +89,84 @@ export default function Call() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const getIceServers = async () => {
-    try {
-      const res = await fetch(
-        "https://randomcall.metered.live/api/v1/turn/credentials?apiKey=3197aeeb715d7a48e0173c693d00f4cc94e0"
-      );
-      const data = await res.json();
-      console.log("Fetched ICE servers:", data.iceServers);
-      return data.iceServers; // ✅ Correct
-    } catch (err) {
-      console.error("Failed to fetch TURN credentials:", err);
-      return [{ urls: "stun:stun.l.google.com:19302" }];
-    }
-  };
+ const getIceServers = async () => {
+  try {
+    const res = await fetch(
+      "https://randomcall.metered.live/api/v1/turn/credentials?apiKey=3197aeeb715d7a48e0173c693d00f4cc94e0"
+    );
+    const data = await res.json();
+    return data.iceServers;
+  } catch (err) {
+    return [{ urls: "stun:stun.l.google.com:19302" }];
+  }
+};
+
 
 
 
   const startPeerConnection = async (initiator, remotePeerId, incomingOffer) => {
-    try {
-      if (!peerRef.current) {
-        const iceServers = await getIceServers();
-        const peer = new RTCPeerConnection({ iceServers });
+  try {
+    // ---------- 1. GET STUN/TURN SERVERS ----------
+    const iceServers = await getIceServers();
+    console.log("Using ICE servers:", iceServers);
 
-        peer.onicecandidate = (event) => {
-          if (event.candidate && remotePeerId) {
-            socket.emit("ice_candidate", {
-              peerId: remotePeerId,
-              candidate: event.candidate,
-            });
-          }
-        };
+    // ---------- 2. CREATE PEER ----------
+    const peer = new RTCPeerConnection({ iceServers });
+    peerRef.current = peer;
 
-        peer.ontrack = (event) => {
-          console.log("Remote track received");
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = event.streams[0];
-          }
-        };
-
-        peer.onconnectionstatechange = () => {
-          console.log("Connection state:", peer.connectionState);
-          if (
-            peer.connectionState === "disconnected" ||
-            peer.connectionState === "failed" ||
-            peer.connectionState === "closed"
-          ) {
-            endCall();
-          }
-        };
-
-        // ✅ FIXED: safe check for getUserMedia
-        if (
-          typeof navigator !== "undefined" &&
-          navigator.mediaDevices?.getUserMedia
-        ) {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          localStreamRef.current = stream;
-          stream.getTracks().forEach((track) => peer.addTrack(track, stream));
-        } else {
-          console.error("getUserMedia is not supported in this browser/context.");
-          alert("Microphone access is not supported in this browser.");
-          return;
-        }
-
-        peerRef.current = peer;
-      }
-
-      const peer = peerRef.current;
-
-      if (initiator) {
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
-        socket.emit("offer", { peerId: remotePeerId, offer: peer.localDescription });
-      } else if (incomingOffer) {
-        await peer.setRemoteDescription(incomingOffer);
-        remoteDescriptionSetRef.current = true;
-
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        socket.emit("answer", {
+    // ---------- 3. ICE CANDIDATES ----------
+    peer.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit("ice_candidate", {
           peerId: remotePeerId,
-          answer: peer.localDescription,
+          candidate: event.candidate,
         });
-
-        for (const c of pendingCandidatesRef.current) {
-          try {
-            await peer.addIceCandidate(c);
-          } catch (err) {
-            console.error("Error adding queued ICE candidate (callee)", err);
-          }
-        }
-        pendingCandidatesRef.current = [];
       }
+    };
 
-      setInCall(true);
-    } catch (err) {
-      console.error("Error in startPeerConnection:", err);
-      endCall();
+    // ---------- 4. REMOTE STREAM ----------
+    peer.ontrack = (event) => {
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    // ---------- 5. LOCAL MIC ----------
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStreamRef.current = stream;
+
+    stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+
+    // ---------- 6. NEGOTIATION ----------
+    if (initiator) {
+      // Caller creates offer
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+
+      socket.emit("offer", {
+        peerId: remotePeerId,
+        offer: peer.localDescription,
+      });
+    } else if (incomingOffer) {
+      // Callee handles offer
+      await peer.setRemoteDescription(incomingOffer);
+
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+
+      socket.emit("answer", {
+        peerId: remotePeerId,
+        answer: peer.localDescription,
+      });
     }
-  };
+
+    setInCall(true);
+  } catch (err) {
+    console.error("❌ PC ERROR:", err);
+    endCall();
+  }
+};
+
 
   const startCall = () => {
     socket.emit("start_call", { userId: `user-${socket.id}` });
